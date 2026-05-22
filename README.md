@@ -6,6 +6,8 @@ This root contains the three cooperating modules:
 - `ML_module_V1`: Random Forest forecast and per-user setpoint recommendation service.
 - `aiot_firmware_v3`: ESP32 firmware that publishes telemetry and control events.
 
+End-to-end runbook: see `TUTORIAL.md`.
+
 ## Personalization and time features
 
 - Setpoint training uses `user_id` from app control events and live inference uses
