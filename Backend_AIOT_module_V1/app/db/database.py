@@ -129,6 +129,15 @@ class Database:
 
     def insert_telemetry(self, item: TelemetryIn) -> None:
         ts = parse_ts(item.ts).isoformat()
+        temp_raw = maybe_float(item.temp_raw)
+        hum_raw = maybe_float(item.hum_raw)
+        temp_ma = maybe_float(item.temp_ma)
+        hum_ma = maybe_float(item.hum_ma)
+        if temp_ma is None:
+            temp_ma = temp_raw
+        if hum_ma is None:
+            hum_ma = hum_raw
+
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
@@ -142,10 +151,10 @@ class Database:
                     item.device_id,
                     item.user_id,
                     ts,
-                    item.temp_raw,
-                    item.hum_raw,
-                    item.temp_ma,
-                    item.hum_ma,
+                    temp_raw,
+                    hum_raw,
+                    temp_ma,
+                    hum_ma,
                     item.mode,
                     item.setpoint_current,
                     item.fan_pwm_cmd,
@@ -308,8 +317,16 @@ class Database:
 
             written = 0
             for bucket_start, items in buckets.items():
-                temp_values = [maybe_float(x["temp_ma"]) for x in items if maybe_float(x["temp_ma"]) is not None]
-                hum_values = [maybe_float(x["hum_ma"]) for x in items if maybe_float(x["hum_ma"]) is not None]
+                temp_values = [
+                    value
+                    for x in items
+                    if (value := self._smoothed_or_raw_value(x, "temp_ma", "temp_raw")) is not None
+                ]
+                hum_values = [
+                    value
+                    for x in items
+                    if (value := self._smoothed_or_raw_value(x, "hum_ma", "hum_raw")) is not None
+                ]
                 fan_values = [maybe_float(x["fan_pwm_actual"]) for x in items if maybe_float(x["fan_pwm_actual"]) is not None]
                 lamp_values = [maybe_int(x["lamp_actual"]) for x in items if maybe_int(x["lamp_actual"]) is not None]
                 mode_values = [x["mode"] for x in items if x["mode"]]
@@ -363,6 +380,13 @@ class Database:
 
             conn.commit()
             return written
+
+    @staticmethod
+    def _smoothed_or_raw_value(row: sqlite3.Row, smoothed_key: str, raw_key: str) -> Optional[float]:
+        smoothed = maybe_float(row[smoothed_key])
+        if smoothed is not None:
+            return smoothed
+        return maybe_float(row[raw_key])
 
     def resample_all_devices(self, intervals: List[int]) -> Dict[str, Dict[int, int]]:
         result: Dict[str, Dict[int, int]] = {}

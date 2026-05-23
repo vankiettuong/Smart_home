@@ -53,6 +53,15 @@ Telemetry and app control events may include `user_id`. The setpoint dataset
 uses `user_id` to personalize recommendations; missing IDs fall back to
 `DEFAULT_USER_ID=anonymous`.
 
+Telemetry ingest and resampling automatically fall back from smoothed values to
+raw values:
+
+- if `temp_ma` is missing, backend stores and resamples from `temp_raw`
+- if `hum_ma` is missing, backend stores and resamples from `hum_raw`
+
+Sending `temp_ma` and `hum_ma` is still preferred because smoother sensor
+signals usually train better models.
+
 Time-of-day training features use UTC timestamps with:
 
 - `FEATURE_UTC_OFFSET_HOURS=0`
