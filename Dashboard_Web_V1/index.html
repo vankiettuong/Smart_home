@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Smart Home AIoT Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Smart Home AIoT</p>
+          <h1>Dashboard điều hòa thông minh</h1>
+        </div>
+        <div class="status-group">
+          <span id="connectionDot" class="status-dot"></span>
+          <span id="connectionText">Đang khởi tạo</span>
+        </div>
+      </header>
+
+      <section class="toolbar" aria-label="Cấu hình dashboard">
+        <label>
+          <span>Backend API</span>
+          <input id="apiBaseInput" type="url" autocomplete="off" />
+        </label>
+        <label>
+          <span>Thiết bị</span>
+          <select id="deviceSelect"></select>
+        </label>
+        <label>
+          <span>User</span>
+          <input id="userIdInput" type="text" value="user-a" autocomplete="off" />
+        </label>
+        <button id="refreshButton" class="button secondary" type="button">Làm mới</button>
+      </section>
+
+      <main class="dashboard-grid">
+        <section class="metric-panel">
+          <article class="metric">
+            <span class="metric-label">Nhiệt độ</span>
+            <strong id="tempValue">--</strong>
+            <small id="tempSource">Chưa có dữ liệu</small>
+          </article>
+          <article class="metric">
+            <span class="metric-label">Độ ẩm</span>
+            <strong id="humValue">--</strong>
+            <small id="humSource">Chưa có dữ liệu</small>
+          </article>
+          <article class="metric">
+            <span class="metric-label">Setpoint</span>
+            <strong id="setpointValue">--</strong>
+            <small id="setpointSource">Theo thiết bị</small>
+          </article>
+          <article class="metric">
+            <span class="metric-label">Chế độ</span>
+            <strong id="modeValue">--</strong>
+            <small id="lastSeenValue">--</small>
+          </article>
+        </section>
+
+        <section class="panel chart-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Xu hướng cảm biến</h2>
+              <p>Nhiệt độ và độ ẩm từ telemetry mới nhất</p>
+            </div>
+            <div class="legend">
+              <span><i class="legend-temp"></i>Nhiệt độ</span>
+              <span><i class="legend-hum"></i>Độ ẩm</span>
+            </div>
+          </div>
+          <canvas id="sensorChart" width="900" height="300"></canvas>
+        </section>
+
+        <section class="panel control-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Điều khiển</h2>
+              <p>Gửi command tới ESP32 qua Backend và MQTT</p>
+            </div>
+          </div>
+
+          <div class="mode-control" role="group" aria-label="Chọn chế độ">
+            <button class="mode-button" data-mode="auto" type="button">Auto</button>
+            <button class="mode-button" data-mode="manual" type="button">Manual</button>
+          </div>
+
+          <label class="field-row">
+            <span>Setpoint nhiệt độ</span>
+            <div class="inline-control">
+              <input id="setpointInput" type="number" min="27" max="32" step="0.5" value="29.5" />
+              <button id="setpointButton" class="button primary" type="button">Gửi</button>
+            </div>
+          </label>
+
+          <label class="field-row">
+            <span>Fan PWM</span>
+            <div class="range-control">
+              <input id="fanPwmInput" type="range" min="0" max="255" step="5" value="0" />
+              <output id="fanPwmValue">0</output>
+            </div>
+          </label>
+
+          <div class="switch-row">
+            <span>Relay</span>
+            <label class="switch">
+              <input id="relayInput" type="checkbox" />
+              <span></span>
+            </label>
+          </div>
+
+          <button id="manualApplyButton" class="button primary wide" type="button">Áp dụng Manual</button>
+        </section>
+
+        <section class="panel feedback-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Comfort feedback</h2>
+              <p>Ghi nhận cảm nhận của user</p>
+            </div>
+          </div>
+          <div class="feedback-actions">
+            <button class="feedback-button hot" data-feedback="too_hot" type="button">Quá nóng</button>
+            <button class="feedback-button ok" data-feedback="comfortable" type="button">Thoải mái</button>
+            <button class="feedback-button cold" data-feedback="too_cold" type="button">Quá lạnh</button>
+          </div>
+        </section>
+
+        <section class="panel ml-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Dự đoán ML</h2>
+              <p>Forecast và setpoint ưa thích từ dữ liệu thu thập</p>
+            </div>
+          </div>
+          <div class="forecast-grid">
+            <article>
+              <span>Setpoint ưa thích</span>
+              <strong id="mlSetpointValue">--</strong>
+            </article>
+            <article>
+              <span>Nhiệt độ sau 10 phút</span>
+              <strong id="mlTemp10Value">--</strong>
+            </article>
+            <article>
+              <span>Độ ẩm sau 10 phút</span>
+              <strong id="mlHum10Value">--</strong>
+            </article>
+            <article>
+              <span>Nhiệt độ sau 20 phút</span>
+              <strong id="mlTemp20Value">--</strong>
+            </article>
+            <article>
+              <span>Độ ẩm sau 20 phút</span>
+              <strong id="mlHum20Value">--</strong>
+            </article>
+          </div>
+          <p id="mlMeta" class="meta-text">Chưa có recommendation</p>
+        </section>
+
+        <section class="panel log-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Nhật ký dashboard</h2>
+              <p>Trạng thái poll và command gần đây</p>
+            </div>
+          </div>
+          <ol id="eventLog" class="event-log"></ol>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

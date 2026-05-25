@@ -384,9 +384,18 @@ void applyMlSetpoint(JsonDocument &doc) {
 
   setpointCurrentC = clampFloat(doc["setpoint_dynamic"].as<float>(), MIN_SETPOINT_C, MAX_SETPOINT_C);
   lastControlHint = doc["control_hint"] | "hold";
-  controlMode = MODE_AUTO;
   controlSource = "ml";
   pendingEventFlag = 1;
+
+  if (controlMode == MODE_MANUAL) {
+    publishDeviceTwin();
+    Serial.printf(
+        "[ML] setpoint %.2f C stored, manual mode kept\n",
+        setpointCurrentC);
+    return;
+  }
+
+  controlMode = MODE_AUTO;
   applyAutomaticControl();
   publishDeviceTwin();
 

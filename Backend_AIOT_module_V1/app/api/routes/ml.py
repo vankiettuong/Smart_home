@@ -37,8 +37,9 @@ def create_ml_recommendation(item: MLRecommendationIn) -> Dict[str, Any]:
         "model_version": item.model_version,
         "source_service": item.source_service,
     }
+    publish_skipped = device_is_in_manual_mode(item.device_id)
     publish_success = False
-    if _mqtt_bridge is not None:
+    if not publish_skipped and _mqtt_bridge is not None:
         publish_success = _mqtt_bridge.publish_ml_setpoint(item.device_id, payload)
 
     recommendation_id = db.insert_ml_recommendation(
@@ -50,7 +51,20 @@ def create_ml_recommendation(item: MLRecommendationIn) -> Dict[str, Any]:
         "status": "stored",
         "recommendation_id": recommendation_id,
         "published_topic": topic,
+        "publish_skipped": publish_skipped,
+        "skip_reason": "device_in_manual_mode" if publish_skipped else None,
         "publish_success": publish_success,
         "esp32_subscribe_topic": topic,
         "payload_example": payload,
     }
+
+
+def device_is_in_manual_mode(device_id: str) -> bool:
+    mode_event = db.latest_control_event(device_id, event_type="mode_change")
+    if mode_event and mode_event.get("new_value") in {"auto", "manual"}:
+        return mode_event["new_value"] == "manual"
+
+    twin = db.latest_device_twin(device_id) or {}
+    latest = db.latest_telemetry(device_id) or {}
+    mode = twin.get("mode_actual") or latest.get("mode")
+    return mode == "manual"

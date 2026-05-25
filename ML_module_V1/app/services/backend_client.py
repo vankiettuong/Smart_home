@@ -5,6 +5,9 @@ import pandas as pd
 import requests
 
 
+DATASET_TIMEOUT_SECONDS = 120
+
+
 class BackendClient:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -40,7 +43,7 @@ class BackendClient:
                 "horizon_2_min": horizon_2_min,
                 "limit": limit,
             },
-            timeout=30,
+            timeout=DATASET_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
         rows = resp.json().get("rows", [])
@@ -62,7 +65,7 @@ class BackendClient:
                 "window_minutes_after": window_minutes_after,
                 "limit": limit,
             },
-            timeout=30,
+            timeout=DATASET_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
         rows = resp.json().get("rows", [])

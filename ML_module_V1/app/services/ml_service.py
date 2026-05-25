@@ -7,6 +7,7 @@ from typing import Any, Deque, Dict, List, Optional
 import numpy as np
 import pandas as pd
 from fastapi import HTTPException
+from pandas.api.types import is_numeric_dtype
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
@@ -33,11 +34,24 @@ from app.core.config import (
     N_ESTIMATORS,
     NIGHT_START_HOUR,
     RANDOM_STATE,
+    RECOMMEND_USER_IDS,
+    SYNTHETIC_FORECAST_CSV,
+    SYNTHETIC_HABIT_CSV,
+    TRAINING_DATA_SOURCE,
 )
 from app.core.helpers import clamp, majority, safe_float
 from app.core.time_utils import cyclic_hour_features, day_period, floor_time, parse_ts, utc_now
 from app.models.bundles import ForecastBundle, SetpointBundle
 from app.services.backend_client import BackendClient
+
+
+def split_feature_columns(df: pd.DataFrame, feature_cols: List[str]) -> tuple[List[str], List[str]]:
+    num_cols = [col for col in feature_cols if is_numeric_dtype(df[col])]
+    cat_cols = [col for col in feature_cols if col not in num_cols]
+    return num_cols, cat_cols
+
+
+SYNTHETIC_DATA_SOURCES = {"synthetic", "simulation", "simulated", "csv"}
 
 
 class MLService:
@@ -50,20 +64,43 @@ class MLService:
         self.last_seen_ts: Dict[str, Optional[str]] = {}
 
     def train_all(self) -> Dict[str, Any]:
-        device_ids = DEVICE_IDS or self.client.get_devices()
+        device_ids = DEVICE_IDS or self._available_device_ids()
         result: Dict[str, Any] = {}
         for device_id in device_ids:
             result[device_id] = self.train_device(device_id)
         return result
 
-    def train_device(self, device_id: str) -> Dict[str, Any]:
-        report: Dict[str, Any] = {"device_id": device_id}
-        report["forecast"] = self._train_forecast(device_id)
-        report["setpoint"] = self._train_setpoint(device_id)
-        return report
+    def _available_device_ids(self) -> List[str]:
+        if self._uses_synthetic_training_data():
+            device_ids: set[str] = set()
+            for path in (SYNTHETIC_FORECAST_CSV, SYNTHETIC_HABIT_CSV):
+                if not path.exists():
+                    continue
+                df = pd.read_csv(path, usecols=["device_id"])
+                device_ids.update(str(x) for x in df["device_id"].dropna().unique())
+            return sorted(device_ids)
+        return self.client.get_devices()
 
-    def _train_forecast(self, device_id: str) -> Dict[str, Any]:
-        df = self.client.get_forecast_dataset(
+    @staticmethod
+    def _uses_synthetic_training_data() -> bool:
+        return TRAINING_DATA_SOURCE in SYNTHETIC_DATA_SOURCES
+
+    @staticmethod
+    def _read_synthetic_csv(path) -> pd.DataFrame:
+        if not path.exists():
+            raise FileNotFoundError(f"Synthetic dataset not found: {path}")
+        return pd.read_csv(path)
+
+    def _forecast_training_dataset(self, device_id: str) -> pd.DataFrame:
+        if self._uses_synthetic_training_data():
+            df = self._read_synthetic_csv(SYNTHETIC_FORECAST_CSV)
+            if "device_id" in df.columns:
+                df = df[df["device_id"].astype(str) == str(device_id)]
+            if "interval_seconds" in df.columns:
+                df = df[pd.to_numeric(df["interval_seconds"], errors="coerce") == FORECAST_INTERVAL_SECONDS]
+            return df.reset_index(drop=True)
+
+        return self.client.get_forecast_dataset(
             device_id=device_id,
             interval_seconds=FORECAST_INTERVAL_SECONDS,
             lookback=FORECAST_LOOKBACK,
@@ -71,6 +108,52 @@ class MLService:
             horizon_2_min=HORIZON_2_MIN,
             limit=5000,
         )
+
+    def _setpoint_training_dataset(self, device_id: str) -> pd.DataFrame:
+        if self._uses_synthetic_training_data():
+            df = self._read_synthetic_csv(SYNTHETIC_HABIT_CSV)
+            if "device_id" in df.columns:
+                df = df[df["device_id"].astype(str) == str(device_id)]
+            return df.reset_index(drop=True)
+
+        return self.client.get_habit_dataset(
+            device_id=device_id,
+            interval_seconds=HABIT_INTERVAL_SECONDS,
+            window_minutes_before=10,
+            window_minutes_after=5,
+            limit=5000,
+        )
+
+    def _recommendation_user_ids(self, device_id: str) -> List[str]:
+        if RECOMMEND_USER_IDS:
+            return RECOMMEND_USER_IDS
+        if not self._uses_synthetic_training_data():
+            return []
+
+        df = self._setpoint_training_dataset(device_id)
+        if "user_id" not in df.columns:
+            return []
+        return sorted(str(x) for x in df["user_id"].dropna().unique())
+
+    def train_device(self, device_id: str) -> Dict[str, Any]:
+        report: Dict[str, Any] = {"device_id": device_id}
+        report["forecast"] = self._safe_train(self._train_forecast, device_id)
+        report["setpoint"] = self._safe_train(self._train_setpoint, device_id)
+        return report
+
+    @staticmethod
+    def _safe_train(train_func, device_id: str) -> Dict[str, Any]:
+        try:
+            return train_func(device_id)
+        except Exception as exc:
+            return {
+                "trained": False,
+                "reason": str(exc),
+                "error_type": exc.__class__.__name__,
+            }
+
+    def _train_forecast(self, device_id: str) -> Dict[str, Any]:
+        df = self._forecast_training_dataset(device_id)
         if df.empty or len(df) < 40:
             return {"trained": False, "reason": "Not enough forecast samples"}
 
@@ -88,13 +171,17 @@ class MLService:
             c for c in df.columns
             if c not in {"device_id", "bucket_start", "interval_seconds", *target_cols}
         ]
-        cat_cols = [c for c in feature_cols if df[c].dtype == object]
-        num_cols = [c for c in feature_cols if c not in cat_cols]
+        num_cols, cat_cols = split_feature_columns(df, feature_cols)
 
         X = df[feature_cols].copy()
-        y = df[target_cols].copy()
+        y = df[target_cols].apply(pd.to_numeric, errors="coerce")
+        valid_targets = y.notna().all(axis=1)
+        X = X.loc[valid_targets]
+        y = y.loc[valid_targets]
+        if len(X) < 40:
+            return {"trained": False, "reason": "Not enough usable forecast samples"}
 
-        split_idx = int(len(df) * 0.8)
+        split_idx = int(len(X) * 0.8)
         X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
         y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
 
@@ -144,21 +231,18 @@ class MLService:
         )
         with self._lock:
             self.forecast_models[device_id] = bundle
-        return {"trained": True, **bundle.metrics}
+        return {"trained": True, "source": TRAINING_DATA_SOURCE, **bundle.metrics}
 
     def _train_setpoint(self, device_id: str) -> Dict[str, Any]:
-        df = self.client.get_habit_dataset(
-            device_id=device_id,
-            interval_seconds=HABIT_INTERVAL_SECONDS,
-            window_minutes_before=10,
-            window_minutes_after=5,
-            limit=5000,
-        )
+        df = self._setpoint_training_dataset(device_id)
         if df.empty or len(df) < 20:
             return {"trained": False, "reason": "Not enough habit samples"}
 
         df = df.copy()
-        df["target_setpoint"] = df.apply(self._derive_target_setpoint, axis=1)
+        if "target_setpoint" in df.columns:
+            df["target_setpoint"] = pd.to_numeric(df["target_setpoint"], errors="coerce")
+        else:
+            df["target_setpoint"] = df.apply(self._derive_target_setpoint, axis=1)
         df = df.dropna(subset=["target_setpoint"])
         if len(df) < 20:
             return {"trained": False, "reason": "Not enough usable setpoint targets"}
@@ -180,8 +264,7 @@ class MLService:
             "label",
         ]
         feature_cols = [c for c in feature_cols if c in df.columns]
-        cat_cols = [c for c in feature_cols if df[c].dtype == object]
-        num_cols = [c for c in feature_cols if c not in cat_cols]
+        num_cols, cat_cols = split_feature_columns(df, feature_cols)
 
         X = df[feature_cols].copy()
         y = df["target_setpoint"].copy()
@@ -233,7 +316,7 @@ class MLService:
         )
         with self._lock:
             self.setpoint_models[device_id] = bundle
-        return {"trained": True, **bundle.metrics}
+        return {"trained": True, "source": TRAINING_DATA_SOURCE, **bundle.metrics}
 
     @staticmethod
     def _derive_target_setpoint(row: pd.Series) -> Optional[float]:
@@ -288,18 +371,27 @@ class MLService:
             if poll_status != "cached":
                 continue
 
-            try:
-                recommendation = self.recommend(device_id)
-            except Exception as exc:
-                result[device_id] = f"error: {exc}"
-                continue
+            user_ids = self._recommendation_user_ids(device_id)
+            if not user_ids:
+                user_ids = [None]
 
-            if recommendation.get("log_warning"):
-                result[device_id] = f"warning: {recommendation['log_warning']}"
-            elif LOG_RECOMMENDATIONS_TO_BACKEND:
-                result[device_id] = "posted"
-            else:
-                result[device_id] = "generated"
+            statuses = []
+            for user_id in user_ids:
+                try:
+                    recommendation = self.recommend(device_id, user_id=user_id)
+                except Exception as exc:
+                    statuses.append(f"{user_id or DEFAULT_USER_ID}:error:{exc}")
+                    continue
+
+                if recommendation.get("log_warning"):
+                    status = f"warning:{recommendation['log_warning']}"
+                elif LOG_RECOMMENDATIONS_TO_BACKEND:
+                    status = "posted"
+                else:
+                    status = "generated"
+                statuses.append(f"{recommendation['user_id']}:{status}")
+
+            result[device_id] = ", ".join(statuses)
         return result
 
     def _build_bucketed_history(self, device_id: str, interval_seconds: int) -> List[Dict[str, Any]]:
@@ -343,7 +435,7 @@ class MLService:
 
         history = self._build_bucketed_history(device_id, FORECAST_INTERVAL_SECONDS)
         if len(history) < FORECAST_LOOKBACK:
-            return None
+            return self._forecast_dataset_features(device_id, bundle)
 
         recent = history[-FORECAST_LOOKBACK:]
         current_dt = parse_ts(recent[-1]["bucket_start"])
@@ -377,6 +469,20 @@ class MLService:
             row.setdefault(feature, None)
         return pd.DataFrame([row])[bundle.features]
 
+    def _latest_forecast_dataset_sample(self, device_id: str) -> Optional[Dict[str, Any]]:
+        df = self._forecast_training_dataset(device_id)
+        if df.empty:
+            return None
+        return df.iloc[-1].to_dict()
+
+    def _forecast_dataset_features(self, device_id: str, bundle: ForecastBundle) -> Optional[pd.DataFrame]:
+        sample = self._latest_forecast_dataset_sample(device_id)
+        if sample is None:
+            return None
+        for feature in bundle.features:
+            sample.setdefault(feature, None)
+        return pd.DataFrame([sample])[bundle.features]
+
     def _current_setpoint_features(self, device_id: str, user_id: str) -> Optional[pd.DataFrame]:
         with self._lock:
             bundle = self.setpoint_models.get(device_id)
@@ -385,7 +491,7 @@ class MLService:
 
         history = self._build_bucketed_history(device_id, HABIT_INTERVAL_SECONDS)
         if len(history) < 3:
-            return None
+            return self._setpoint_dataset_features(device_id, user_id, bundle)
 
         recent = history[-20:]
         temps = [x["temp_mean"] for x in recent if x["temp_mean"] is not None]
@@ -424,11 +530,44 @@ class MLService:
             row.setdefault(feature, None)
         return pd.DataFrame([row])[bundle.features]
 
+    def _latest_habit_dataset_sample(self, device_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        df = self._setpoint_training_dataset(device_id)
+        if df.empty:
+            return None
+        if "user_id" in df.columns:
+            user_df = df[df["user_id"].astype(str) == str(user_id)]
+            if not user_df.empty:
+                df = user_df
+        return df.iloc[-1].to_dict()
+
+    def _setpoint_dataset_features(
+        self,
+        device_id: str,
+        user_id: str,
+        bundle: SetpointBundle,
+    ) -> Optional[pd.DataFrame]:
+        sample = self._latest_habit_dataset_sample(device_id, user_id)
+        if sample is None:
+            return None
+        sample["user_id"] = user_id
+        for feature in bundle.features:
+            sample.setdefault(feature, None)
+        return pd.DataFrame([sample])[bundle.features]
+
     def recommend(self, device_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
-        latest = self.client.get_latest_telemetry(device_id)
+        latest_warning: Optional[str] = None
+        try:
+            latest = self.client.get_latest_telemetry(device_id)
+        except Exception as exc:
+            latest = None
+            latest_warning = str(exc)
+
+        fallback_sample: Optional[Dict[str, Any]] = None
         if latest is None:
-            raise HTTPException(status_code=404, detail="No telemetry available for device")
-        resolved_user_id = user_id or latest.get("user_id") or DEFAULT_USER_ID
+            fallback_sample = self._latest_forecast_dataset_sample(device_id)
+            if fallback_sample is None:
+                raise HTTPException(status_code=404, detail="No telemetry available for device")
+        resolved_user_id = user_id or (latest or {}).get("user_id") or DEFAULT_USER_ID
 
         with self._lock:
             forecast_bundle = self.forecast_models.get(device_id)
@@ -470,12 +609,17 @@ class MLService:
             "device_id": device_id,
             "user_id": resolved_user_id,
             "ts": utc_now().isoformat(),
-            "latest_temp": safe_float(latest.get("temp_ma") or latest.get("temp_raw")),
-            "latest_hum": safe_float(latest.get("hum_ma") or latest.get("hum_raw")),
-            "mode": latest.get("mode"),
+            "latest_temp": self._latest_temp(latest, fallback_sample),
+            "latest_hum": self._latest_hum(latest, fallback_sample),
+            "mode": (latest or {}).get("mode") or (fallback_sample or {}).get("mode_now"),
+            "model_version": "rf_synthetic_v1" if self._uses_synthetic_training_data() else "rf_v1",
+            "source_service": "ml_service_synthetic" if self._uses_synthetic_training_data() else "ml_service",
+            "training_source": TRAINING_DATA_SOURCE,
             **forecast_result,
             **setpoint_result,
         }
+        if latest_warning:
+            recommendation["latest_warning"] = latest_warning
 
         pred_temp_10 = recommendation.get(f"pred_temp_plus_{HORIZON_1_MIN}m")
         if pred_temp_10 is not None:
@@ -496,3 +640,19 @@ class MLService:
                 recommendation["log_warning"] = str(exc)
 
         return recommendation
+
+    @staticmethod
+    def _latest_temp(latest: Optional[Dict[str, Any]], fallback_sample: Optional[Dict[str, Any]]) -> Optional[float]:
+        if latest is not None:
+            return safe_float(latest.get("temp_ma") or latest.get("temp_raw"))
+        if fallback_sample is not None:
+            return safe_float(fallback_sample.get("temp_now"))
+        return None
+
+    @staticmethod
+    def _latest_hum(latest: Optional[Dict[str, Any]], fallback_sample: Optional[Dict[str, Any]]) -> Optional[float]:
+        if latest is not None:
+            return safe_float(latest.get("hum_ma") or latest.get("hum_raw"))
+        if fallback_sample is not None:
+            return safe_float(fallback_sample.get("hum_now"))
+        return None

@@ -42,11 +42,11 @@ class PollRecommendationFlowTest(unittest.TestCase):
             recommendation_result = service.recommend_cached_updates(poll_result)
 
         self.assertEqual(poll_result, {"esp32-room-a": "cached"})
-        self.assertEqual(recommendation_result, {"esp32-room-a": "posted"})
-        self.assertEqual(len(client.recommendations), 1)
-        self.assertEqual(client.recommendations[0]["device_id"], "esp32-room-a")
-        self.assertEqual(client.recommendations[0]["user_id"], "anonymous")
-        self.assertEqual(client.recommendations[0]["setpoint_dynamic"], DEFAULT_SETPOINT)
+        self.assertEqual(recommendation_result, {"esp32-room-a": "user-a:posted, user-b:posted"})
+        self.assertEqual(len(client.recommendations), 2)
+        self.assertEqual({item["device_id"] for item in client.recommendations}, {"esp32-room-a"})
+        self.assertEqual({item["user_id"] for item in client.recommendations}, {"user-a", "user-b"})
+        self.assertEqual({item["setpoint_dynamic"] for item in client.recommendations}, {DEFAULT_SETPOINT})
 
     def test_unchanged_telemetry_does_not_post_again(self):
         client = FakeBackendClient()
@@ -63,7 +63,7 @@ class PollRecommendationFlowTest(unittest.TestCase):
 
         self.assertEqual(second_poll, {"esp32-room-a": "unchanged"})
         self.assertEqual(recommendation_result, {})
-        self.assertEqual(len(client.recommendations), 1)
+        self.assertEqual(len(client.recommendations), 2)
 
 
 if __name__ == "__main__":

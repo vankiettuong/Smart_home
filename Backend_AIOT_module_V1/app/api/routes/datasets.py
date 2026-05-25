@@ -27,8 +27,15 @@ def forecast_dataset(
         interval_seconds=interval_seconds,
         lookback=lookback,
         horizon_minutes=(horizon_1_min, horizon_2_min),
+        limit=limit,
     )
-    return {"count": len(rows), "rows": rows[:limit]}
+    count = db.count_forecast_samples(
+        device_id=device_id,
+        interval_seconds=interval_seconds,
+        lookback=lookback,
+        horizon_minutes=(horizon_1_min, horizon_2_min),
+    )
+    return {"count": count, "rows": rows}
 
 
 @router.get("/devices/{device_id}/dataset/habit")
@@ -44,5 +51,6 @@ def habit_dataset(
         interval_seconds=interval_seconds,
         window_minutes_before=window_minutes_before,
         window_minutes_after=window_minutes_after,
+        limit=limit,
     )
-    return {"count": len(rows), "rows": rows[:limit]}
+    return {"count": len(rows), "rows": rows}

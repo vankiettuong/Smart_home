@@ -14,6 +14,7 @@ class Settings:
     mqtt_topic_control_events: str = os.getenv("MQTT_TOPIC_CONTROL_EVENTS", "devices/+/control-events")
     mqtt_topic_device_twin: str = os.getenv("MQTT_TOPIC_DEVICE_TWIN", "devices/+/devicetwin")
     mqtt_topic_ml_setpoint_template: str = os.getenv("MQTT_TOPIC_ML_SETPOINT_TEMPLATE", "devices/{device_id}/ml-setpoint")
+    mqtt_topic_command_template: str = os.getenv("MQTT_TOPIC_COMMAND_TEMPLATE", "devices/{device_id}/command")
     default_user_id: str = os.getenv("DEFAULT_USER_ID", "anonymous")
     feature_utc_offset_hours: float = float(os.getenv("FEATURE_UTC_OFFSET_HOURS", "0"))
     day_start_hour: int = int(os.getenv("DAY_START_HOUR", "6"))

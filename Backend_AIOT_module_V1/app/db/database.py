@@ -254,17 +254,34 @@ class Database:
             conn.commit()
             return int(cursor.lastrowid)
 
-    def latest_ml_recommendation(self, device_id: str) -> Optional[Dict[str, Any]]:
+    def latest_ml_recommendation(self, device_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        sql = """
+            SELECT * FROM ml_recommendations
+            WHERE device_id = ?
+        """
+        params: List[Any] = [device_id]
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            params.append(user_id)
+        sql += " ORDER BY ts DESC, id DESC LIMIT 1"
+
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM ml_recommendations
-                WHERE device_id = ?
-                ORDER BY ts DESC, id DESC
-                LIMIT 1
-                """,
-                (device_id,),
-            ).fetchone()
+            row = conn.execute(sql, params).fetchone()
+            return dict(row) if row else None
+
+    def latest_control_event(self, device_id: str, event_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        sql = """
+            SELECT * FROM control_events
+            WHERE device_id = ?
+        """
+        params: List[Any] = [device_id]
+        if event_type is not None:
+            sql += " AND event_type = ?"
+            params.append(event_type)
+        sql += " ORDER BY ts DESC, id DESC LIMIT 1"
+
+        with self._connect() as conn:
+            row = conn.execute(sql, params).fetchone()
             return dict(row) if row else None
 
     def latest_telemetry(self, device_id: str) -> Optional[Dict[str, Any]]:
@@ -274,6 +291,18 @@ class Database:
                 SELECT * FROM telemetry_raw
                 WHERE device_id = ?
                 ORDER BY ts DESC
+                LIMIT 1
+                """,
+                (device_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def latest_device_twin(self, device_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM device_twin
+                WHERE device_id = ?
                 LIMIT 1
                 """,
                 (device_id,),
@@ -407,12 +436,36 @@ class Database:
                 (device_id, interval_seconds),
             ).fetchall()
 
+    def count_resampled(self, device_id: str, interval_seconds: int) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count FROM telemetry_resampled
+                WHERE device_id = ? AND interval_seconds = ?
+                """,
+                (device_id, interval_seconds),
+            ).fetchone()
+            return int(row["count"]) if row else 0
+
+    def count_forecast_samples(
+        self,
+        device_id: str,
+        interval_seconds: int = 60,
+        lookback: int = 10,
+        horizon_minutes: Tuple[int, int] = (10, 20),
+    ) -> int:
+        row_count = self.count_resampled(device_id, interval_seconds)
+        horizon_steps = tuple(max(1, int((h * 60) / interval_seconds)) for h in horizon_minutes)
+        max_h = max(horizon_steps)
+        return max(0, row_count - max_h - lookback + 1)
+
     def build_forecast_dataset(
         self,
         device_id: str,
         interval_seconds: int = 60,
         lookback: int = 10,
         horizon_minutes: Tuple[int, int] = (10, 20),
+        limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         rows = self._fetch_resampled(device_id, interval_seconds)
         if not rows:
@@ -459,6 +512,8 @@ class Database:
                 sample[f"target_temp_plus_{horizon_min}m"] = future["temp_mean"]
                 sample[f"target_hum_plus_{horizon_min}m"] = future["hum_mean"]
             result.append(sample)
+            if limit is not None and len(result) >= limit:
+                break
         return result
 
     def build_habit_dataset(
@@ -467,10 +522,12 @@ class Database:
         interval_seconds: int = 30,
         window_minutes_before: int = 10,
         window_minutes_after: int = 5,
+        limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         rows = self._fetch_resampled(device_id, interval_seconds)
         if not rows:
             return []
+        parsed_rows = [(parse_ts(row["bucket_start"]), row) for row in rows]
 
         with self._connect() as conn:
             events = conn.execute(
@@ -489,8 +546,8 @@ class Database:
             event_dt = parse_ts(event["ts"])
             before_start = event_dt - timedelta(minutes=window_minutes_before)
             after_end = event_dt + timedelta(minutes=window_minutes_after)
-            before = [r for r in rows if before_start <= parse_ts(r["bucket_start"]) < event_dt]
-            after = [r for r in rows if event_dt <= parse_ts(r["bucket_start"]) <= after_end]
+            before = [r for dt, r in parsed_rows if before_start <= dt < event_dt]
+            after = [r for dt, r in parsed_rows if event_dt <= dt <= after_end]
             if len(before) < 3:
                 continue
 
@@ -513,6 +570,8 @@ class Database:
                 "event_id": event["id"],
                 "event_ts": event["ts"],
                 "event_type": event["event_type"],
+                "old_value": event["old_value"],
+                "new_value": event["new_value"],
                 "trigger_source": event["trigger_source"],
                 "label": label,
                 "user_feedback": event["user_feedback"],
@@ -539,6 +598,8 @@ class Database:
                 sample["temp_mean_after"] = sum(temp_after) / len(temp_after) if temp_after else None
                 sample["hum_mean_after"] = sum(hum_after) / len(hum_after) if hum_after else None
             result.append(sample)
+            if limit is not None and len(result) >= limit:
+                break
         return result
 
     @staticmethod

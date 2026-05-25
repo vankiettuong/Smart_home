@@ -1,9 +1,12 @@
 import os
 from datetime import timezone
+from pathlib import Path
 
 UTC = timezone.utc
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://localhost:8000")
 DEVICE_IDS = [x.strip() for x in os.getenv("DEVICE_IDS", "").split(",") if x.strip()]
+RECOMMEND_USER_IDS = [x.strip() for x in os.getenv("RECOMMEND_USER_IDS", "").split(",") if x.strip()]
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "2"))
 AUTO_RECOMMEND_ON_POLL = os.getenv("AUTO_RECOMMEND_ON_POLL", "true").lower() == "true"
 CACHE_MAXLEN = int(os.getenv("CACHE_MAXLEN", "4000"))
@@ -23,3 +26,10 @@ N_ESTIMATORS = int(os.getenv("N_ESTIMATORS", "300"))
 RANDOM_STATE = int(os.getenv("RANDOM_STATE", "42"))
 BACKGROUND_AUTOTRAIN_SECONDS = int(os.getenv("BACKGROUND_AUTOTRAIN_SECONDS", "900"))
 LOG_RECOMMENDATIONS_TO_BACKEND = os.getenv("LOG_RECOMMENDATIONS_TO_BACKEND", "true").lower() == "true"
+TRAINING_DATA_SOURCE = os.getenv("TRAINING_DATA_SOURCE", "synthetic").lower()
+SYNTHETIC_FORECAST_CSV = Path(
+    os.getenv("SYNTHETIC_FORECAST_CSV", str(PROJECT_ROOT / "synthetic_room_ac_forecast.csv"))
+)
+SYNTHETIC_HABIT_CSV = Path(
+    os.getenv("SYNTHETIC_HABIT_CSV", str(PROJECT_ROOT / "synthetic_room_ac_habit.csv"))
+)
