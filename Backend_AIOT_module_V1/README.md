@@ -78,8 +78,11 @@ so `hour_sin`, `hour_cos`, and `day_period` match local day/night behavior.
   training datasets over HTTP for the ML service.
 - ML service polls new telemetry from backend, runs inference, then posts
   recommendation to `POST /ml/recommendations`.
-- Backend stores it in `ml_recommendations`
-- Backend publishes MQTT to topic template: `devices/{device_id}/ml-setpoint`
+- Backend stores it in `ml_recommendations`.
+- Backend publishes MQTT to topic template `devices/{device_id}/ml-setpoint`
+  only when the device is not in manual mode and the recommendation belongs
+  to the active user. Other users' recommendations stay queryable in the DB
+  but do not overwrite the ESP32 setpoint.
 
 Example ESP32 subscribe topic:
 

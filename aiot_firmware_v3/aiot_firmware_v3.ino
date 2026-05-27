@@ -37,13 +37,16 @@
 
 // ---------- User configuration ----------
 
-const char *WIFI_SSID = "CHANGE_ME_WIFI_SSID";
-const char *WIFI_PASSWORD = "CHANGE_ME_WIFI_PASSWORD";
+const char *WIFI_SSID = "abc";
+const char *WIFI_PASSWORD = "12345678";
+//const char *WIFI_SSID = "Hai Dang";
+//const char *WIFI_PASSWORD = "Dang241005";
 
-const char *MQTT_HOST = "CHANGE_ME_MQTT_HOST";
+
+const char *MQTT_HOST = "f7381aec847c405591c40af0e3305262.s1.eu.hivemq.cloud";
 const uint16_t MQTT_PORT = 8883;
-const char *MQTT_USERNAME = "CHANGE_ME_MQTT_USERNAME";
-const char *MQTT_PASSWORD = "CHANGE_ME_MQTT_PASSWORD";
+const char *MQTT_USERNAME = "User12345";
+const char *MQTT_PASSWORD = "Broker123";
 
 const char *DEVICE_ID = "esp32-room-a";
 const char *MQTT_CLIENT_PREFIX = "aiot-fw-v3-";
@@ -59,7 +62,7 @@ const int DHT_PIN = 4;
 #define DHT_TYPE DHT22
 
 const int RELAY_PIN = 26;
-const bool RELAY_ACTIVE_LOW = true;
+const bool RELAY_ACTIVE_LOW = false;
 
 // Fan PWM must drive a fan PWM input or a proper transistor/MOSFET driver.
 const int FAN_PWM_PIN = 25;
@@ -74,6 +77,8 @@ const float MIN_SETPOINT_C = 27.0;
 const float MAX_SETPOINT_C = 32.0;
 const float RELAY_ON_DELTA_C = 0.35;
 const float RELAY_OFF_DELTA_C = 0.15;
+// Set false if this relay drives a cooling compressor instead of a lamp/heater.
+const bool RELAY_AUTO_ON_WHEN_BELOW_SETPOINT = true;
 
 const uint32_t SENSOR_INTERVAL_MS = 10000;
 const uint32_t TELEMETRY_INTERVAL_MS = 10000;
@@ -215,7 +220,13 @@ bool publishJson(const String &topic, JsonDocument &doc, bool retained = false) 
 void writeRelay(bool enabled) {
   relayCommand = enabled;
   relayActual = enabled;
-  digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? !enabled : enabled);
+  const bool gpioHigh = RELAY_ACTIVE_LOW ? !enabled : enabled;
+  digitalWrite(RELAY_PIN, gpioHigh ? HIGH : LOW);
+  Serial.printf(
+      "[RELAY] logical=%s pin=%d gpio=%s\n",
+      enabled ? "ON" : "OFF",
+      RELAY_PIN,
+      gpioHigh ? "HIGH" : "LOW");
 }
 
 void configureFanPwm() {
@@ -244,10 +255,11 @@ void applyAutomaticControl() {
 
   const float tempForControl = isnan(tempMovingAverageC) ? tempRawC : tempMovingAverageC;
   const float errorC = tempForControl - setpointCurrentC;
+  const float relayDemandC = RELAY_AUTO_ON_WHEN_BELOW_SETPOINT ? -errorC : errorC;
 
-  if (errorC >= RELAY_ON_DELTA_C) {
+  if (relayDemandC >= RELAY_ON_DELTA_C) {
     writeRelay(true);
-  } else if (errorC <= -RELAY_OFF_DELTA_C) {
+  } else if (relayDemandC <= -RELAY_OFF_DELTA_C) {
     writeRelay(false);
   }
 

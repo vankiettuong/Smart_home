@@ -1,5 +1,5 @@
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter
 
@@ -22,6 +22,7 @@ _mqtt_bridge: MQTTBridge | None = None
 @router.post("/recommendations")
 def create_ml_recommendation(item: MLRecommendationIn) -> Dict[str, Any]:
     topic = settings.mqtt_topic_ml_setpoint_template.format(device_id=item.device_id)
+    active_user_id = active_user_for_device(item.device_id)
     payload = {
         "device_id": item.device_id,
         "user_id": item.user_id,
@@ -37,7 +38,8 @@ def create_ml_recommendation(item: MLRecommendationIn) -> Dict[str, Any]:
         "model_version": item.model_version,
         "source_service": item.source_service,
     }
-    publish_skipped = device_is_in_manual_mode(item.device_id)
+    skip_reason = ml_publish_skip_reason(item.device_id, item.user_id, active_user_id)
+    publish_skipped = skip_reason is not None
     publish_success = False
     if not publish_skipped and _mqtt_bridge is not None:
         publish_success = _mqtt_bridge.publish_ml_setpoint(item.device_id, payload)
@@ -52,11 +54,32 @@ def create_ml_recommendation(item: MLRecommendationIn) -> Dict[str, Any]:
         "recommendation_id": recommendation_id,
         "published_topic": topic,
         "publish_skipped": publish_skipped,
-        "skip_reason": "device_in_manual_mode" if publish_skipped else None,
+        "skip_reason": skip_reason,
+        "active_user_id": active_user_id,
         "publish_success": publish_success,
         "esp32_subscribe_topic": topic,
         "payload_example": payload,
     }
+
+
+def ml_publish_skip_reason(device_id: str, user_id: Optional[str], active_user_id: Optional[str]) -> Optional[str]:
+    if device_is_in_manual_mode(device_id):
+        return "device_in_manual_mode"
+    if user_id and active_user_id and str(user_id) != str(active_user_id):
+        return "inactive_user"
+    return None
+
+
+def active_user_for_device(device_id: str) -> Optional[str]:
+    latest_event = db.latest_user_control_event(device_id)
+    if latest_event and latest_event.get("user_id"):
+        return str(latest_event["user_id"])
+
+    latest = db.latest_user_telemetry(device_id) or {}
+    if latest.get("user_id"):
+        return str(latest["user_id"])
+
+    return None
 
 
 def device_is_in_manual_mode(device_id: str) -> bool:

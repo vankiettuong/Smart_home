@@ -24,9 +24,9 @@ def send_device_command(device_id: str, item: DeviceCommandIn) -> Dict[str, Any]
     command_payload = _build_command_payload(item)
     if not any(
         value is not None
-        for value in (item.mode, item.setpoint, item.fan_pwm, item.relay, item.feedback)
+        for value in (item.user_id, item.mode, item.setpoint, item.fan_pwm, item.relay, item.feedback)
     ):
-        raise HTTPException(status_code=400, detail="Command must include mode, setpoint, fan_pwm, relay, or feedback")
+        raise HTTPException(status_code=400, detail="Command must include user_id, mode, setpoint, fan_pwm, relay, or feedback")
 
     topic = settings.mqtt_topic_command_template.format(device_id=device_id)
     stored_events = _store_control_events(device_id, item)
@@ -79,6 +79,25 @@ def _is_feedback_only(item: DeviceCommandIn) -> bool:
 
 def _store_control_events(device_id: str, item: DeviceCommandIn) -> List[Dict[str, Any]]:
     events: List[ControlEventIn] = []
+
+    is_user_activation_only = (
+        item.user_id is not None
+        and item.mode is None
+        and item.setpoint is None
+        and item.fan_pwm is None
+        and item.relay is None
+        and item.feedback is None
+    )
+    if is_user_activation_only:
+        events.append(
+            ControlEventIn(
+                device_id=device_id,
+                user_id=item.user_id,
+                event_type="active_user_change",
+                new_value=item.user_id,
+                trigger_source=item.source,
+            )
+        )
 
     if item.mode is not None:
         events.append(

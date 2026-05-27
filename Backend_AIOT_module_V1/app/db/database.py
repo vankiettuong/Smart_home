@@ -284,12 +284,42 @@ class Database:
             row = conn.execute(sql, params).fetchone()
             return dict(row) if row else None
 
+    def latest_user_control_event(self, device_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM control_events
+                WHERE device_id = ?
+                  AND user_id IS NOT NULL
+                  AND user_id != ''
+                ORDER BY ts DESC, id DESC
+                LIMIT 1
+                """,
+                (device_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
     def latest_telemetry(self, device_id: str) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT * FROM telemetry_raw
                 WHERE device_id = ?
+                ORDER BY ts DESC
+                LIMIT 1
+                """,
+                (device_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def latest_user_telemetry(self, device_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM telemetry_raw
+                WHERE device_id = ?
+                  AND user_id IS NOT NULL
+                  AND user_id != ''
                 ORDER BY ts DESC
                 LIMIT 1
                 """,

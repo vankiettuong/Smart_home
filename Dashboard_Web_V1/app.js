@@ -79,8 +79,9 @@ function initialize() {
 }
 
 function bindEvents() {
-  elements.refreshButton.addEventListener("click", () => {
+  elements.refreshButton.addEventListener("click", async () => {
     saveSettings();
+    await activateCurrentUser();
     refreshDevices();
     pollNow();
   });
@@ -94,13 +95,15 @@ function bindEvents() {
   elements.deviceSelect.addEventListener("change", () => {
     state.deviceId = elements.deviceSelect.value || state.deviceId;
     localStorage.setItem("dashboard.deviceId", state.deviceId);
+    activateCurrentUser();
     pollNow();
   });
 
-  elements.userIdInput.addEventListener("change", () => {
+  elements.userIdInput.addEventListener("change", async () => {
     state.userId = elements.userIdInput.value.trim() || "anonymous";
     elements.userIdInput.value = state.userId;
     localStorage.setItem("dashboard.userId", state.userId);
+    await activateCurrentUser();
     pollNow();
   });
 
@@ -361,16 +364,36 @@ async function sendCommand(payload) {
     const response = await apiPost(`/devices/${encodeURIComponent(state.deviceId)}/command`, body);
     rememberPendingCommand(payload, response);
     const commandName = describeCommand(payload);
-    const publishText = response.publish_skipped
-      ? "đã lưu trong Backend"
-      : response.publish_success
-        ? "đã publish MQTT"
-        : "đã lưu, MQTT chưa sẵn sàng";
-    logEvent(`${commandName}: ${publishText}`, "ok");
+    logEvent(`${commandName}: ${publishStatusText(response)}`, "ok");
     await pollNow();
   } catch (error) {
     logEvent(error.message, "error");
   }
+}
+
+async function activateCurrentUser() {
+  saveSettings();
+  if (!state.deviceId || !state.userId) {
+    return;
+  }
+
+  try {
+    const response = await apiPost(`/devices/${encodeURIComponent(state.deviceId)}/command`, {
+      source: "dashboard",
+      user_id: state.userId,
+    });
+    logEvent(`User ${state.userId}: ${publishStatusText(response)}`, "ok");
+  } catch (error) {
+    logEvent(`Không kích hoạt được user ${state.userId}: ${error.message}`, "error");
+  }
+}
+
+function publishStatusText(response) {
+  return response.publish_skipped
+    ? "đã lưu trong Backend"
+    : response.publish_success
+      ? "đã publish MQTT"
+      : "đã lưu, MQTT chưa sẵn sàng";
 }
 
 function rememberPendingCommand(payload, response) {

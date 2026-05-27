@@ -158,13 +158,14 @@ Dashboard gọi `POST /devices/{device_id}/command` với payload gồm `source`
 
 1. Tạo payload command.
 2. Lưu các `control_events` tương ứng.
-3. Nếu chỉ là feedback thì không publish MQTT.
-4. Nếu là lệnh điều khiển thì publish tới `devices/{device_id}/command`.
-5. Trả về trạng thái `publish_success`, `publish_skipped` và danh sách event đã lưu.
+3. Nếu payload chỉ có `user_id`, lưu `active_user_change` và publish command nhẹ để ESP32 đổi user active.
+4. Nếu chỉ là feedback thì không publish MQTT.
+5. Nếu là lệnh điều khiển thì publish tới `devices/{device_id}/command`.
+6. Trả về trạng thái `publish_success`, `publish_skipped` và danh sách event đã lưu.
 
-### 6.6. Logic bảo vệ manual mode
+### 6.6. Logic bảo vệ publish ML
 
-Khi ML gửi recommendation vào `/ml/recommendations`, backend kiểm tra thiết bị đang ở manual mode hay không. Nếu đang manual, backend vẫn lưu recommendation nhưng bỏ qua publish MQTT để tránh ML ghi đè thao tác thủ công của người dùng.
+Khi ML gửi recommendation vào `/ml/recommendations`, backend luôn lưu recommendation. Backend chỉ publish MQTT nếu thiết bị không ở manual mode và recommendation thuộc user đang active. Recommendation của user khác vẫn được lưu để dashboard xem nhưng không được đẩy xuống ESP32, tránh việc user được ML xử lý sau ghi đè setpoint của user đang chọn.
 
 ## 7. ML service
 
@@ -275,7 +276,7 @@ Firmware thực hiện:
 
 ### 8.3. Auto và manual mode
 
-Ở auto mode, firmware tính `errorC = tempForControl - setpointCurrentC`. Nếu nhiệt độ cao hơn setpoint đủ ngưỡng, relay bật; nếu thấp hơn setpoint đủ ngưỡng, relay tắt. Fan PWM được scale theo sai lệch nhiệt độ.
+Ở auto mode, firmware tính `errorC = tempForControl - setpointCurrentC`. Mặc định relay/đèn bật khi nhiệt độ thấp hơn setpoint đủ ngưỡng; nếu relay dùng cho máy nén làm lạnh có thể đổi `RELAY_AUTO_ON_WHEN_BELOW_SETPOINT` thành `false`. Fan PWM vẫn được scale theo sai lệch nhiệt độ nóng hơn setpoint.
 
 Ở manual mode, command từ dashboard có thể đặt trực tiếp `fan_pwm` và `relay`. ML setpoint có thể được lưu nhưng không ép thiết bị rời manual mode nếu backend hoặc firmware đang giữ logic manual.
 
