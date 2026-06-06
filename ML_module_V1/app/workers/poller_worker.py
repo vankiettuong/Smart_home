@@ -27,6 +27,8 @@ class PollerWorker:
                     recommendations = self.service.recommend_cached_updates(result)
                     if recommendations:
                         print(f"[RECOMMEND] {recommendations}")
+            except FileNotFoundError:
+                pass
             except Exception as exc:
                 print(f"[POLL] Error: {exc}")
             self.stop_event.wait(POLL_SECONDS)
